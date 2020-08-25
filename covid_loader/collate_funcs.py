@@ -8,7 +8,16 @@ from torch.nn.utils.rnn import pad_sequence
 
 
 def extract_features(input_df: pd.DataFrame) -> torch.Tensor:
-    
+    '''
+    Parameters:
+    -----------
+    input_df: Pandas DataFrame
+        Dataframe from Covid Dataset
+        
+    Returns:
+    ---------
+    Torch tensor
+    '''    
     with np.errstate(all='ignore'):
         case_stats = np.log10(1.1+input_df[["num_cases", 
                                             "num_days", 
@@ -31,6 +40,20 @@ def extract_features(input_df: pd.DataFrame) -> torch.Tensor:
 def forecast_set(input_df, forecast_horizon = 1, 
                  feature_extractor = extract_features) -> Tuple[torch.Tensor, 
                                                                 torch.Tensor]:
+    '''
+    Parameters:
+    ----------
+    input_df: Pandas DataFrame
+        Dataframe from Covid Dataset
+    forecast_horizon : int (default 1)
+        how far ahead we want to predict
+    feature_extractor: function (default extract_features)
+        Defines the types of features to extract
+    
+    Returns: 
+    --------
+    Tuple of torch tensors corresponding to inputs and targets
+    '''
     features = feature_extractor(input_df)
     X = features[:-forecast_horizon,:]
     y = torch.tensor(np.log10(1+ input_df[["num_cases"]].values)[forecast_horizon:,:],
@@ -45,6 +68,22 @@ def forecast_set(input_df, forecast_horizon = 1,
 
 def windowed_forecast_set(input_df, window_len = 10, 
                           forecast_horizon = 1) -> Tuple[torch.Tensor, torch.Tensor]:
+    '''
+    Parameters:
+    ----------
+    input_df: Pandas DataFrame
+        Dataframe from Covid Dataset
+    window_len: int (default 10)
+        length of the horizon window to use for making windowed predictions
+    forecast_horizon : int (default 1)
+        how far ahead we want to predict
+    feature_extractor: function (default extract_features)
+        Defines the types of features to extract
+    
+    Returns: 
+    --------
+    Tuple of torch tensors corresponding to inputs and targets
+    '''    
     X, y = forecast_set(input_df, forecast_horizon)
     nrows, nfeats = X.shape
     N = nrows//window_len
@@ -62,8 +101,30 @@ def windowed_forecast_set(input_df, window_len = 10,
 
 
 def gen_forecasting_collate(f, **kwargs):
-    ''''''
-    def forecasting_collator(batch, padding_value = -1) -> Tuple[List[str], torch.Tensor, torch.Tensor]:
+    '''Generator function for creating collate functions to be used for DataLoader
+    
+    Parameters:
+    -----------
+    f : function that returns PyTorch tensors based on input DataFrame
+    
+    Returns:
+    --------
+    function
+    '''
+    def forecasting_collator(batch, padding_value = -1) -> Tuple[List[str], torch.Tensor, torch.Tensor]:        
+        '''        
+        
+        Parameters:
+        -----------
+        batch : list
+            batch of data from Dataset object
+        padding_value : int (default -1)
+        
+        Returns:
+        --------
+        Namedtuple with fields: "id_", "features", "targets"
+        
+        '''
         geo_ids = [item[0] for item in batch]
         features = []
         targets = []
@@ -89,5 +150,4 @@ def gen_forecasting_collate(f, **kwargs):
     return forecasting_collator
 
 windowed_features_collate = gen_forecasting_collate(windowed_forecast_set)
-features_collate = gen_forecasting_collate(forecast_set, 
-                                       padding_value = -99)
+features_collate = gen_forecasting_collate(forecast_set, padding_value = -1)
