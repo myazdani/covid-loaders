@@ -29,7 +29,7 @@ def extract_features(input_df: pd.DataFrame) -> torch.Tensor:
 
 
 def forecast_set(input_df, forecast_horizon = 1, 
-                 feature_extractor = extract_featuers) -> Tuple[torch.Tensor, 
+                 feature_extractor = extract_features) -> Tuple[torch.Tensor, 
                                                                 torch.Tensor]:
     features = feature_extractor(input_df)
     X = features[:-forecast_horizon,:]
@@ -61,7 +61,7 @@ def windowed_forecast_set(input_df, window_len = 10,
     
 
 
-def gen_forecasting_collate(f):
+def gen_forecasting_collate(f, **kwargs):
     ''''''
     def forecasting_collator(batch, padding_value = -1) -> Tuple[List[str], torch.Tensor, torch.Tensor]:
         geo_ids = [item[0] for item in batch]
@@ -86,8 +86,8 @@ def gen_forecasting_collate(f):
         return batch
     
     
-    return feature_collator
+    return forecasting_collator
 
-windowed_features_collate = gen_feature_collate(windowed_forecast_set)
-features_collate = gen_feature_collate(forecast_set, 
+windowed_features_collate = gen_forecasting_collate(windowed_forecast_set)
+features_collate = gen_forecasting_collate(forecast_set, 
                                        padding_value = -99)
