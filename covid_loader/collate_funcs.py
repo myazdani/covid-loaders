@@ -28,8 +28,10 @@ def extract_features(input_df: pd.DataFrame) -> torch.Tensor:
 
 
 
-def forecast_set(input_df, forecast_horizon = 1) -> Tuple[torch.Tensor, torch.Tensor]:    
-    features = extract_features(input_df)
+def forecast_set(input_df, forecast_horizon = 1, 
+                 feature_extractor = extract_featuers) -> Tuple[torch.Tensor, 
+                                                                torch.Tensor]:
+    features = feature_extractor(input_df)
     X = features[:-forecast_horizon,:]
     y = torch.tensor(np.log10(1+ input_df[["num_cases"]].values)[forecast_horizon:,:],
                      dtype = torch.float32)
@@ -38,8 +40,7 @@ def forecast_set(input_df, forecast_horizon = 1) -> Tuple[torch.Tensor, torch.Te
     y.rename_("day", None)   
     
     return X, y
-    
-
+      
 
 
 def windowed_forecast_set(input_df, window_len = 10, 
@@ -58,52 +59,35 @@ def windowed_forecast_set(input_df, window_len = 10,
     
     return X_windowed, y_windowed
     
+
+
+def gen_forecasting_collate(f):
+    ''''''
+    def forecasting_collator(batch, padding_value = -1) -> Tuple[List[str], torch.Tensor, torch.Tensor]:
+        geo_ids = [item[0] for item in batch]
+        features = []
+        targets = []
+        for item in batch:
+            X, y = f(item[1])
+            features.append(X.rename(None))
+            targets.append(y.rename(None))
+
+        features_padded = (pad_sequence(features, batch_first = True).
+                           rename("batch", *X.names))
+        targets_padded = (pad_sequence(targets, batch_first = True).
+                          rename("batch", *y.names))
+
+
+        Batch = namedtuple('Batch', ["id_", "features", "targets"])
+        batch = Batch(id_ = geo_ids, 
+                      features = features_padded,
+                      targets = targets_padded)
+
+        return batch
     
     
-    
-def features_collate(batch) -> Tuple[List[str], torch.Tensor, torch.Tensor]:
-    geo_ids = [item[0] for item in batch]
-    features = []
-    targets = []
-    for item in batch:
-        X, y = forecast_set(item[1])
-        features.append(X.rename(None))
-        targets.append(y.rename(None))
+    return feature_collator
 
-    features_padded = (pad_sequence(features, batch_first = True).
-                       rename("batch", *X.names))
-    targets_padded = (pad_sequence(targets, batch_first = True).
-                      rename("batch", *y.names))
-
-    Batch = namedtuple('Batch', ["id_", "features", "targets"])
-    batch = Batch(id_ = geo_ids, 
-                  features = features_padded,
-                  targets = targets_padded)
-
-    return batch
-
-
-def windowed_features_collate(batch, padding_value = -1) -> Tuple[List[str], 
-                                                                  torch.Tensor, 
-                                                                  torch.Tensor]:
-
-    geo_ids = [item[0] for item in batch]
-    features = []
-    targets = []
-    for item in batch:
-        X, y = windowed_forecast_set(item[1])
-        features.append(X.rename(None))
-        targets.append(y.rename(None))
-
-    features_padded = (pad_sequence(features, batch_first = True).
-                       rename("batch", *X.names))
-    targets_padded = (pad_sequence(targets, batch_first = True).
-                      rename("batch", *y.names))
-    
-    
-    Batch = namedtuple('Batch', ["id_", "features", "targets"])
-    batch = Batch(id_ = geo_ids, 
-                  features = features_padded,
-                  targets = targets_padded)
-
-    return batch
+windowed_features_collate = gen_feature_collate(windowed_forecast_set)
+features_collate = gen_feature_collate(forecast_set, 
+                                       padding_value = -99)
