@@ -14,6 +14,10 @@ GLOBAL_DEATHS_URL = "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/m
     
 class CovidDataset(Dataset):
     '''
+    Base class for creating Covid Dataset objects.
+    
+    Parameters:
+    -----------
     root : Path
         where to save/load data
     download: bool (default True)
@@ -21,14 +25,10 @@ class CovidDataset(Dataset):
 
     '''    
     def __init__(self, root: Path, download: bool = True, 
-                 by: List = ["Combined_Key"], days_range: List = [], 
-                 date_range: List = [], Admin2: List = [], 
-                 Province_State: List = [], days_since: int = 0, 
-                 remove_negative_days: bool = False) -> None:
-
+                 days_range: List = [], date_range: List = [], 
+                 days_since: int = 0, remove_negative_days: bool = False) -> None:
         self.root = root 
         self.download = download
-        self.by = by
         self.days_range = days_range
         self.date_range = date_range
         self.days_since = days_since
@@ -105,21 +105,27 @@ class CovidDataset(Dataset):
 
         return df_m        
 
-        
-    
-    
+
     
 class USDataset(CovidDataset):  
     '''
+    Base class for creating a US CovidDataset
+    
+    Parameters:
+    -----------
+    by : List (default ["Combined_Key"])
+        Specifies how DataFrame should using grouping    
     Admin2: List (default empty)
         Filter data to specific list of Admin2 
     Province_State: List (default empty)
         Filter data to specific list of Procince_State
+        
     '''    
     
-    def __init__(self,Admin2: List = [], Province_State: List = [], 
-                 **kwargs) -> None:
+    def __init__(self, by: List = ["Combined_Key"], Admin2: List = [], 
+                 Province_State: List = [], **kwargs) -> None:
         CovidDataset.__init__(self, **kwargs)    
+        self.by = by
         self.Admin2 = Admin2
         self.Province_State = Province_State         
         
@@ -285,19 +291,30 @@ class USCasesDeathsDataset(USDataset):
     
     
 class GlobalDataset(CovidDataset):  
-    '''Base class'''
+    '''
+    Base class for creating a US CovidDataset
     
-    def __init__(self, root: Path, download: bool = True, 
-                 by: List = ["Combined_Key"], days_range: List = [], 
-                 date_range: List = [], Province_State: List = [], 
-                 Country_Region: List = [],remove_negative_days: bool = False):
-        CovidDataset.__init__(self,**kwargs)     
+    Parameters:
+    -----------
+    by : List (default ["Country/Region", "Province/State"])
+        Specifies how DataFrame should using grouping
+    Province_State : List (default empty)
+        Filter data to specific list of Procince_State
+    Country_Region : List (default empty)
+        Filter data to specific list of Countries 
+        
+    '''        
+    
+    def __init__(self, by = ["Country/Region", "Province/State"], 
+                 Province_State: List = [], Country_Region: List = [], **kwargs) -> None:
+        CovidDataset.__init__(self,**kwargs)
+        self.by = by
         self.Province_State = Province_State
         self.Country_Region = Country_Region
                 
     def global_geo_filter(self, df):
         if self.Province_State:
-            df = df[df['Province/State'].isin(Province_State)]
+            df = df[df['Province/State'].isin(self.Province_State)]
         if self.Country_Region:
             df = df[df['Country/Region'].isin(self.Country_Region)]               
         if self.remove_negative_days:
@@ -313,18 +330,23 @@ class GlobalDeathsDataset(GlobalDataset):
     def __init__(self, **kwargs):
         GlobalDataset.__init__(self,**kwargs)
         if self.download:
-            df_deaths_raw = self._download(GOBAL_DEATHS_URL)
+            df_deaths_raw = self._download(GLOBAL_DEATHS_URL)
         else:            
             df_deaths_raw = pd.read_csv(self.filename)            
-        df = utils.prep_us_deaths(df_deaths_raw, by=self.by)
-        df = self.us_geo_filter(df)
+
+        self.id_vars = ['Province/State', 'Country/Region', 'Lat', 'Long']
+        self.target_name = "num_deaths"
+        self.target_diff = "new_deaths"                  
+        df = self.melt_data(df_deaths_raw)            
+        
+        df = self.global_geo_filter(df)
         self.dfs = self.date_filter_groupby(df)    
         
     @property
     def filename(self) -> str:
         folder_path = os.path.abspath(self.root)
         os.makedirs(folder_path, exist_ok = True)
-        filename = os.path.join(folder_path, GLOBAL_DEATHS.rpartition('/')[-1])
+        filename = os.path.join(folder_path, GLOBAL_DEATHS_URL.rpartition('/')[-1])
         return filename    
     
 class GlobalCasesDataset(GlobalDataset):  
@@ -333,14 +355,20 @@ class GlobalCasesDataset(GlobalDataset):
         if self.download:
             df_cases_raw = self._download(GLOBAL_CASES_URL)
         else:            
-            df_cases_raw = pd.read_csv(self.filename)            
-        df = utils.prep_us_cases(df_cases_raw, by=self.by)
-        df = self.us_geo_filter(df)
+            df_cases_raw = pd.read_csv(self.filename)  
+
+            
+        self.id_vars = ['Province/State', 'Country/Region', 'Lat', 'Long']
+        self.target_name = "num_cases"
+        self.target_diff = "new_cases"                  
+        
+        df = self.melt_data(df_cases_raw)
+        df = self.global_geo_filter(df)
         self.dfs = self.date_filter_groupby(df)    
         
     @property
     def filename(self) -> str:
         folder_path = os.path.abspath(self.root)
         os.makedirs(folder_path, exist_ok = True)
-        filename = os.path.join(folder_path, US_CASES_URL.rpartition('/')[-1])
+        filename = os.path.join(folder_path, GLOBAL_CASES_URL.rpartition('/')[-1])
         return filename     
