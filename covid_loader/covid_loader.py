@@ -4,7 +4,7 @@ from pathlib import Path
 import pandas as pd
 import torch
 from torch.utils.data import Dataset
-from . import utils
+#from . import utils
 
 US_CASES_URL = "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_confirmed_US.csv"
 US_DEATHS_URL = "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_deaths_US.csv"
@@ -13,18 +13,25 @@ GLOBAL_CASES_URL = "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/ma
 GLOBAL_DEATHS_URL = "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_deaths_global.csv"    
     
 class CovidDataset(Dataset):
-    '''Base class'''
+    '''
+    root : Path
+        where to save/load data
+    download: bool (default True)
+        download data
+
+    '''    
     def __init__(self, root: Path, download: bool = True, 
                  by: List = ["Combined_Key"], days_range: List = [], 
                  date_range: List = [], Admin2: List = [], 
-                 Province_State: List = [],remove_negative_days: bool = False):
+                 Province_State: List = [], days_since: int = 0, 
+                 remove_negative_days: bool = False) -> None:
+
         self.root = root 
         self.download = download
         self.by = by
         self.days_range = days_range
         self.date_range = date_range
-        self.Admin2 = Admin2
-        self.Province_State = Province_State
+        self.days_since = days_since
         self.remove_negative_days = remove_negative_days   
         
     def date_filter_groupby(self, df):        
@@ -72,26 +79,50 @@ class CovidDataset(Dataset):
         return len(self.dfs)
     
     def __getitem__(self, ix):
-        return self.dfs[ix]            
+        return self.dfs[ix]   
+
+    def melt_data(self, df: pd.DataFrame):
+        df_m = pd.melt(df, id_vars = self.id_vars)
+        df_m["variable"] = pd.to_datetime(df_m["variable"])
+        df_m.rename(columns = {"variable": "date", "value": self.target_name}, 
+                          inplace=True)    
+        def num_days_since(df_x):
+            indx = df_x[self.target_name] >= self.days_since
+            thresh_date = df_x[indx].date.min()
+            num_days = (df_x.date - thresh_date).dt.days        
+            return num_days.rename("num_days")       
+        num_days =  df_m.groupby(self.by).apply(lambda x: num_days_since(x))
+        num_days.index = num_days.index.get_level_values(-1)    
+        df_m = pd.merge(df_m, num_days, left_index=True, 
+                              right_index=True)
+
+        num_new = (df_m.groupby(self.by)[self.target_name].
+                         apply(lambda x: x.diff()).
+                         rename(self.target_diff))
+        num_new.index = num_new.index.get_level_values(-1)    
+        df_m = pd.merge(df_m, num_new, left_index=True, 
+                              right_index=True)
+
+        return df_m        
+
+        
     
     
     
 class USDataset(CovidDataset):  
-    '''Base class'''
+    '''
+    Admin2: List (default empty)
+        Filter data to specific list of Admin2 
+    Province_State: List (default empty)
+        Filter data to specific list of Procince_State
+    '''    
     
-    def __init__(self, root: Path, download: bool = True, 
-                 by: List = ["Combined_Key"], days_range: List = [], 
-                 date_range: List = [], Admin2: List = [], 
-                 Province_State: List = [],remove_negative_days: bool = False):
-        self.root = root 
-        self.download = download
-        self.by = by
-        self.days_range = days_range
-        self.date_range = date_range
+    def __init__(self,Admin2: List = [], Province_State: List = [], 
+                 **kwargs) -> None:
+        CovidDataset.__init__(self, **kwargs)    
         self.Admin2 = Admin2
-        self.Province_State = Province_State
-        self.remove_negative_days = remove_negative_days           
-        #CovidDataset.__init__(self,**kwargs)     
+        self.Province_State = Province_State         
+        
                 
     def us_geo_filter(self, df):
         if self.Province_State:
@@ -109,15 +140,32 @@ class USDataset(CovidDataset):
         
     
 class USDeathsDataset(USDataset):  
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs) -> None:
         USDataset.__init__(self,**kwargs)
         if self.download:
             df_deaths_raw = self._download(US_DEATHS_URL)
         else:            
-            df_deaths_raw = pd.read_csv(self.filename)            
-        df = utils.prep_us_deaths(df_deaths_raw, by=self.by)
+            df_deaths_raw = pd.read_csv(self.filename)   
+            
+            
+        self.id_vars = ['UID',
+                        'iso2',
+                        'iso3',
+                        'code3',
+                        'FIPS',
+                        'Admin2',
+                        'Province_State',
+                        'Country_Region',
+                        'Lat',
+                        'Long_',
+                        'Combined_Key',
+                        'Population']
+        self.target_name = "num_deaths"
+        self.target_diff = "new_deaths"            
+            
+        df = self.melt_data(df_deaths_raw)
         df = self.us_geo_filter(df)
-        self.dfs = self.date_filter_groupby(df)    
+        self.dfs = self.date_filter_groupby(df)         
         
     @property
     def filename(self) -> str:
@@ -127,13 +175,29 @@ class USDeathsDataset(USDataset):
         return filename
 
 class USCasesDataset(USDataset):  
-    def __init__(self, **kwargs):
-        USDataset.__init__(self,**kwargs)
+    def __init__(self, **kwargs) -> None:
+        USDataset.__init__(self, **kwargs)
         if self.download:
             df_cases_raw = self._download(US_CASES_URL)
         else:            
-            df_cases_raw = pd.read_csv(self.filename)            
-        df = utils.prep_us_cases(df_cases_raw, by=self.by)
+            df_cases_raw = pd.read_csv(self.filename)  
+            
+        self.id_vars = ['UID',
+                        'iso2',
+                        'iso3',
+                        'code3',
+                        'FIPS',
+                        'Admin2',
+                        'Province_State',
+                        'Country_Region',
+                        'Lat',
+                        'Long_',
+                        'Combined_Key']   
+        self.target_name = "num_cases"
+        self.target_diff = "new_cases"            
+            
+
+        df = self.melt_data(df_cases_raw)
         df = self.us_geo_filter(df)
         self.dfs = self.date_filter_groupby(df)    
         
@@ -153,10 +217,56 @@ class USCasesDeathsDataset(USDataset):
         else:            
             df_cases_raw = pd.read_csv(self.us_cases_filename)
             df_deaths_raw = pd.read_csv(self.us_deaths_filename)
-
-        df = utils.prep_us_cases_deaths(df_cases_raw, df_deaths_raw, by=self.by)
+                    
+        df = self.merge_cases_deaths(df_cases_raw, df_deaths_raw)    
         df = self.us_geo_filter(df)
         self.dfs = self.date_filter_groupby(df)    
+        
+        
+    def merge_cases_deaths(self, df_cases_raw, df_deaths_raw):
+        self.id_vars = ['UID',
+                        'iso2',
+                        'iso3',
+                        'code3',
+                        'FIPS',
+                        'Admin2',
+                        'Province_State',
+                        'Country_Region',
+                        'Lat',
+                        'Long_',
+                        'Combined_Key']   
+        self.target_name = "num_cases"
+        self.target_diff = "new_cases" 
+        df_cases = self.melt_data(df_cases_raw)
+        
+        self.id_vars = ['UID',
+                        'iso2',
+                        'iso3',
+                        'code3',
+                        'FIPS',
+                        'Admin2',
+                        'Province_State',
+                        'Country_Region',
+                        'Lat',
+                        'Long_',
+                        'Combined_Key',
+                        'Population']
+        self.target_name = "num_deaths"
+        self.target_diff = "new_deaths"                        
+        df_deaths = self.melt_data(df_deaths_raw)      
+        
+        df_us = pd.merge(df_cases[["Province_State", "Admin2", 
+                                     "Combined_Key", "date", "num_cases", 
+                                     "num_days", "new_cases"]],
+                         df_deaths[["Province_State", "Admin2", 
+                                     "Combined_Key", "date", "Population", 
+                                     "num_deaths", "new_deaths"]],
+                         left_on = ["Province_State", "Admin2", "Combined_Key", 
+                                    "date"],
+                         right_on =  ["Province_State", "Admin2", "Combined_Key", 
+                                      "date"])    
+        return df_us        
+
                 
         
     @property
@@ -181,14 +291,9 @@ class GlobalDataset(CovidDataset):
                  by: List = ["Combined_Key"], days_range: List = [], 
                  date_range: List = [], Province_State: List = [], 
                  Country_Region: List = [],remove_negative_days: bool = False):
-        self.root = root 
-        self.download = download
-        self.by = by
-        self.days_range = days_range
-        self.date_range = date_range
+        CovidDataset.__init__(self,**kwargs)     
         self.Province_State = Province_State
         self.Country_Region = Country_Region
-        self.remove_negative_days = remove_negative_days
                 
     def global_geo_filter(self, df):
         if self.Province_State:
